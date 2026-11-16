@@ -1,0 +1,6 @@
+{
+  "name": "RackLite Server Panel",
+  "description": "Panel manajemen server Linux ringan berbasis Next.js App Router dan SQLite dengan Web Terminal, File Manager, Nginx, Database, Firewall, dan Backup.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

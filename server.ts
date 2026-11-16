@@ -11,6 +11,7 @@ import { getClientIp, isIpAllowed } from './lib/security';
 const dev = process.env.NODE_ENV !== 'production';
 const hostname = process.env.HOSTNAME || '0.0.0.0';
 const port = parseInt(process.env.PORT || '3000', 10);
+const isWindows = process.platform === 'win32';
 
 function parseCookies(cookieHeader: string | undefined): Record<string, string> {
   const result: Record<string, string> = {};
@@ -35,7 +36,12 @@ interface PtyLike {
 }
 
 function createTerminalSession(cols: number, rows: number): PtyLike {
-  // 1. Coba gunakan node-pty jika terpasang di server produksi
+  // 1. Windows: Use PowerShell with ConPTY-like behavior via stdin/stdout
+  if (isWindows) {
+    return createWindowsTerminalSession(cols, rows);
+  }
+
+  // 2. Linux/macOS: Try node-pty first
   try {
     const nodePty = require('node-pty') as {
       spawn: (
@@ -74,7 +80,7 @@ function createTerminalSession(cols: number, rows: number): PtyLike {
       onExit: (cb) => ptyProc.onExit((e) => cb(e.exitCode)),
     };
   } catch {
-    // 2. Fallback ringan tanpa dependensi native C++ menggunakan util-linux `script` atau bash
+    // 3. Fallback: Use `script` command or direct shell spawn
     const shell = fs.existsSync('/bin/bash') ? '/bin/bash' : '/bin/sh';
     const hasScript = fs.existsSync('/usr/bin/script');
 
@@ -116,6 +122,55 @@ function createTerminalSession(cols: number, rows: number): PtyLike {
       },
     };
   }
+}
+
+function createWindowsTerminalSession(cols: number, rows: number): PtyLike {
+  // Use PowerShell with VT sequences enabled for ANSI support
+  const child = spawn('powershell.exe', ['-NoProfile', '-NoExit'], {
+    cwd: process.env.USERPROFILE || process.cwd(),
+    env: {
+      ...process.env,
+      TERM: 'xterm-256color',
+      COLUMNS: String(cols),
+      LINES: String(rows),
+      // Force PowerShell to emit ANSI sequences
+      PSModulePath: process.env.PSModulePath || '',
+    },
+    windowsHide: false,
+  });
+
+  // Enable VT processing on stdout for ANSI color support
+  child.stdout?.setEncoding('utf8');
+  child.stderr?.setEncoding('utf8');
+
+  let cols_ = cols;
+  let rows_ = rows;
+
+  return {
+    write: (d) => {
+      if (!child.killed && child.stdin?.writable) {
+        child.stdin.write(d);
+      }
+    },
+    resize: (c, r) => {
+      cols_ = c;
+      rows_ = r;
+      // Send resize escape sequence to PowerShell
+      child.stdin?.write(`\x1b[8;${r};${c}t`);
+    },
+    kill: () => {
+      if (!child.killed) {
+        child.kill('SIGTERM');
+      }
+    },
+    onData: (cb) => {
+      child.stdout?.on('data', (chunk: Buffer) => cb(chunk.toString('utf8')));
+      child.stderr?.on('data', (chunk: Buffer) => cb(chunk.toString('utf8')));
+    },
+    onExit: (cb) => {
+      child.on('exit', (code) => cb(code));
+    },
+  };
 }
 
 async function main() {

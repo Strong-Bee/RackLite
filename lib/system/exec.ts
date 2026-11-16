@@ -24,6 +24,10 @@ const ALLOWED_BINARIES = new Set([
   'psql',
   'pg_dump',
   'which',
+  'wmic',
+  'powershell',
+  'composer',
+  'curl',
 ]);
 
 export interface ExecResult {
@@ -43,16 +47,24 @@ export async function findBinary(binary: string): Promise<string | null> {
   if (!ALLOWED_BINARIES.has(binary)) return null;
   if (binaryCache.has(binary)) return binaryCache.get(binary) ?? null;
 
-  const searchDirs = [
-    '/usr/local/sbin',
-    '/usr/local/bin',
-    '/usr/sbin',
-    '/usr/bin',
-    '/sbin',
-    '/bin',
-  ];
+  const isWindows = process.platform === 'win32';
+  const searchDirs = isWindows
+    ? [
+        'C:\\Windows\\System32',
+        'C:\\Windows\\SysWOW64',
+        'C:\\Windows',
+      ]
+    : [
+        '/usr/local/sbin',
+        '/usr/local/bin',
+        '/usr/sbin',
+        '/usr/bin',
+        '/sbin',
+        '/bin',
+      ];
+
   for (const dir of searchDirs) {
-    const candidate = `${dir}/${binary}`;
+    const candidate = isWindows ? `${dir}\\${binary}.exe` : `${dir}/${binary}`;
     try {
       await fs.access(candidate);
       binaryCache.set(binary, candidate);
@@ -61,6 +73,18 @@ export async function findBinary(binary: string): Promise<string | null> {
       // Lanjut cek direktori berikutnya
     }
   }
+
+  // For Windows, also try without .exe extension (some commands are built-in)
+  if (isWindows && (binary === 'powershell' || binary === 'wmic')) {
+    try {
+      // These are typically available in PATH
+      binaryCache.set(binary, binary);
+      return binary;
+    } catch {
+      // Not available
+    }
+  }
+
   binaryCache.set(binary, null);
   return null;
 }
@@ -71,7 +95,7 @@ export async function findBinary(binary: string): Promise<string | null> {
 export async function runSystemCommand(
   binary: string,
   args: string[],
-  options?: { timeoutMs?: number; input?: string }
+  options?: { timeoutMs?: number; input?: string; cwd?: string }
 ): Promise<ExecResult> {
   if (!ALLOWED_BINARIES.has(binary)) {
     return {
@@ -94,12 +118,16 @@ export async function runSystemCommand(
   }
 
   try {
+    const isWindows = process.platform === 'win32';
     const { stdout, stderr } = await execFileAsync(binPath, args, {
       timeout: options?.timeoutMs ?? 15000,
       maxBuffer: 4 * 1024 * 1024,
+      cwd: options?.cwd,
       env: {
         NODE_ENV: process.env.NODE_ENV || 'production',
-        PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+        PATH: isWindows
+          ? 'C:\\Windows\\System32;C:\\Windows;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0'
+          : '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
         LANG: 'C.UTF-8',
       },
     });

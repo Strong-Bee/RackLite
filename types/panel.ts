@@ -180,4 +180,161 @@ export interface PanelSettings {
   s3_region: string;
   s3_access_key: string;
   s3_secret_key: string;
+  smtp_host: string;
+  smtp_port: string;
+  smtp_secure: string;
+  smtp_auth: string;
+  smtp_username: string;
+  smtp_password: string;
+  smtp_from: string;
+}
+
+export interface SmtpConfig {
+  host: string;
+  port: number;
+  secure: boolean;
+  auth: boolean;
+  username: string;
+  password: string;
+  from: string;
+}
+
+export interface SshKey {
+  id: string;
+  name: string;
+  fingerprint: string;
+  type: string;
+  publicKey: string;
+  privateKey: string | null;
+  createdAt: string;
+}
+
+export interface DockerContainer {
+  id: string;
+  name: string;
+  image: string;
+  status: string;
+  state: string;
+  ports: Array<{
+    IP: string;
+    PublicPort: number;
+    PrivatePort: number;
+    Type: string;
+  }> | null;
+  created: number;
+  labels: Record<string, string>;
+}
+
+export interface DockerImage {
+  id: string;
+  repository: string;
+  tag: string;
+  size: number;
+  created: number;
+  labels: Record<string, string>;
+}
+
+export interface AppStoreItem {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  tags: string[];
+  latestVersion: string;
+  size?: number;
+  icon?: string;
+  repository: string;
+  maintainer: string;
+  homepage?: string;
+  requiresDatabase?: 'mariadb' | 'postgres' | 'none';
+  defaultPort?: number;
+}
+
+export interface InstalledApp {
+  id: string;
+  appId: string;
+  name: string;
+  version: string;
+  status: 'running' | 'stopped' | 'error' | 'installing';
+  path: string;
+  url?: string;
+  database?: {
+    engine: 'mariadb' | 'postgres';
+    dbName: string;
+    dbUser: string;
+  };
+  installedAt: string;
+  updatedAt?: string;
+}
+
+export interface StoreApplication {
+  id: number;
+  slug: string;
+  name: string;
+  description: string;
+  category: string;
+  icon: string | null;
+  developer: string | null;
+  latestVersion: string;
+  repositoryUrl: string | null;
+  officialUrl: string | null;
+  documentationUrl: string | null;
+  license: string | null;
+  requirements: string | null;
+  dependencies: string | null;
+  installationConfig: string | null;
+  isFeatured: number;
+  osCompatibility: string | null;
+  minRamMb: number | null;
+  minStorageMb: number | null;
+  requiredPorts: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InstalledApplication {
+  id: string;
+  applicationId: number;
+  installedVersion: string;
+  installationPath: string;
+  serviceName: string | null;
+  port: number | null;
+  status: 'installed' | 'running' | 'stopped' | 'error' | 'installing' | 'updating' | 'uninstalling';
+  installedAt: string;
+  updatedAt: string | null;
+}
+
+export interface InstallationTask {
+  id: string;
+  applicationId: number;
+  action: 'install' | 'uninstall' | 'start' | 'stop' | 'restart' | 'update';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  progress: number;
+  logs: string | null;
+  errorMessage: string | null;
+  startedAt: string;
+  completedAt: string | null;
+}
+
+export interface ApplicationVersion {
+  id: number;
+  applicationId: number;
+  version: string;
+  releaseNotes: string | null;
+  releaseDate: string | null;
+  downloadUrl: string | null;
+  checksum: string | null;
+  createdAt: string;
+}
+
+export interface StoreCategories {
+  categories: string[];
+  counts: Record<string, number>;
+}
+
+export interface StoreStats {
+  totalAvailable: number;
+  totalInstalled: number;
+  totalUpdates: number;
+  totalCategories: number;
 }

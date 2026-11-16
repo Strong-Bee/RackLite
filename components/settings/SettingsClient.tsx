@@ -19,6 +19,13 @@ export function SettingsClient({ currentRole }: { currentRole: UserRole }) {
     s3_region: 'us-east-1',
     s3_access_key: '',
     s3_secret_key: '',
+    smtp_host: '',
+    smtp_port: '587',
+    smtp_secure: 'false',
+    smtp_auth: 'true',
+    smtp_username: '',
+    smtp_password: '',
+    smtp_from: '',
   });
   const [saving, setSaving] = useState(false);
 

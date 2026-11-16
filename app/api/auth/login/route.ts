@@ -13,6 +13,7 @@ import {
 } from '@/lib/auth';
 import { getClientIp, isIpAllowed, verifyCsrfOrigin } from '@/lib/security';
 import { recordAudit } from '@/lib/api-guard';
+import { recordLoginAttempt, isIpBlocked } from '@/lib/system/security';
 import type { UserRole } from '@/types/panel';
 
 const LoginSchema = z.object({
@@ -59,6 +60,22 @@ export async function POST(req: NextRequest) {
 
   const username = parsed.data.username.toLowerCase();
   const rateKey = `${ip}:${username}`;
+
+  // Check if IP is blocked by security system
+  const blockCheck = isIpBlocked(ip);
+  if (blockCheck.blocked) {
+    await recordLoginAttempt({
+      ipAddress: ip,
+      username,
+      success: false,
+      userAgent: req.headers.get('user-agent') || undefined,
+    });
+
+    return NextResponse.json(
+      { error: `Akses diblokir: ${blockCheck.reason}${blockCheck.expiresAt ? ` (berakhir: ${blockCheck.expiresAt})` : ' (permanen)'}` },
+      { status: 403 }
+    );
+  }
   const rateCheck = checkLoginRateLimit(rateKey);
   if (!rateCheck.allowed) {
     return NextResponse.json(
@@ -87,6 +104,12 @@ export async function POST(req: NextRequest) {
 
   if (!user || user.is_active !== 1) {
     recordLoginFailure(rateKey);
+    await recordLoginAttempt({
+      ipAddress: ip,
+      username,
+      success: false,
+      userAgent: req.headers.get('user-agent') || undefined,
+    });
     recordAudit({
       username,
       action: 'LOGIN',
@@ -104,6 +127,12 @@ export async function POST(req: NextRequest) {
   const validPass = await verifyPassword(parsed.data.password, user.password_hash);
   if (!validPass) {
     recordLoginFailure(rateKey);
+    await recordLoginAttempt({
+      ipAddress: ip,
+      username: user.username,
+      success: false,
+      userAgent: req.headers.get('user-agent') || undefined,
+    });
     recordAudit({
       userId: user.id,
       username: user.username,
@@ -147,6 +176,12 @@ export async function POST(req: NextRequest) {
   }
 
   clearLoginFailures(rateKey);
+  await recordLoginAttempt({
+    ipAddress: ip,
+    username: user.username,
+    success: true,
+    userAgent: req.headers.get('user-agent') || undefined,
+  });
   db.prepare("UPDATE users SET last_login_at = datetime('now') WHERE id = ?").run(
     user.id
   );

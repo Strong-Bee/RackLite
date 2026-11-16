@@ -15,6 +15,10 @@ export interface GuardFailure {
   response: NextResponse;
 }
 
+export type AuthenticatedRequest = NextRequest & {
+  user?: SessionPayload & { role: UserRole };
+};
+
 /**
  * Mencatat setiap aksi penting ke tabel audit_logs dan berkas panel.log.
  */
@@ -156,4 +160,21 @@ export async function requireAuth(
   }
 
   return { ok: true, session: verifiedSession, ip };
+}
+
+/**
+ * Helper untuk route handler yang memerlukan autentikasi.
+ * Mengembalikan NextResponse jika gagal, atau undefined jika berhasil.
+ */
+export async function withAuth(
+  req: NextRequest,
+  options?: { requiredRole?: UserRole }
+): Promise<NextResponse | undefined> {
+  const result = await requireAuth(req, options);
+  if (!result.ok) {
+    return result.response;
+  }
+  // Attach user to request for convenience
+  (req as AuthenticatedRequest).user = result.session;
+  return undefined;
 }

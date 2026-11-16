@@ -27,6 +27,21 @@ const SettingsSchema = z.object({
   s3_secret_key: z.string().trim().max(256).optional(),
 });
 
+const SmtpSchema = z.object({
+  host: z.string().trim().min(1, 'SMTP host wajib diisi'),
+  port: z.number().int().min(1).max(65535),
+  secure: z.boolean().default(false),
+  auth: z.boolean().default(true),
+  username: z.string().trim().max(255).optional().default(''),
+  password: z.string().trim().max(255).optional().default(''),
+  from: z.string().trim().email('Format email tidak valid').optional().default(''),
+});
+
+const SmtpTestSchema = SmtpSchema.extend({
+  host: z.string().trim().min(1),
+  port: z.number().int().min(1).max(65535),
+});
+
 export async function GET(req: NextRequest) {
   const guard = await requireAuth(req);
   if (!guard.ok) return guard.response;
@@ -54,7 +69,68 @@ export async function POST(req: NextRequest) {
   const guard = await requireAuth(req, { requiredRole: 'admin' });
   if (!guard.ok) return guard.response;
 
-  const parsed = SettingsSchema.safeParse(await req.json().catch(() => null));
+  const body = await req.json().catch(() => null);
+
+  // Handle SMTP test request
+  if (body.smtpTest) {
+    const smtpParsed = SmtpTestSchema.safeParse(body.smtpTest);
+    if (!smtpParsed.success) {
+      return NextResponse.json(
+        { success: false, message: smtpParsed.error.issues[0]?.message || 'Konfigurasi SMTP tidak valid.' },
+        { status: 400 }
+      );
+    }
+    const result = await testSmtpConnection(smtpParsed.data);
+    return NextResponse.json(result);
+  }
+
+  // Handle SMTP config save
+  if (body.smtp) {
+    const smtpParsed = SmtpSchema.safeParse(body.smtp);
+    if (!smtpParsed.success) {
+      return NextResponse.json(
+        { error: smtpParsed.error.issues[0]?.message || 'Konfigurasi SMTP tidak valid.' },
+        { status: 400 }
+      );
+    }
+
+    const db = getDb();
+    const upsert = db.prepare(
+      `INSERT INTO settings (key, value, updated_at)
+       VALUES (?, ?, datetime('now'))
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
+    );
+
+    const data = smtpParsed.data;
+    const tx = db.transaction(() => {
+      upsert.run('smtp_host', data.host);
+      upsert.run('smtp_port', String(data.port));
+      upsert.run('smtp_secure', String(data.secure));
+      upsert.run('smtp_auth', String(data.auth));
+      upsert.run('smtp_username', data.username);
+      if (data.password) upsert.run('smtp_password', data.password);
+      upsert.run('smtp_from', data.from);
+    });
+    tx();
+
+    recordAudit({
+      userId: guard.session.userId,
+      username: guard.session.username,
+      action: 'SMTP_UPDATE',
+      target: 'smtp_settings',
+      status: 'success',
+      detail: `host=${data.host}, port=${data.port}, secure=${data.secure}`,
+      ip: guard.ip,
+    });
+
+    return NextResponse.json({
+      ok: true,
+      message: 'Konfigurasi SMTP berhasil disimpan.',
+    });
+  }
+
+  // Handle regular panel settings
+  const parsed = SettingsSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json(
       { error: parsed.error.issues[0]?.message || 'Pengaturan tidak valid.' },
@@ -100,4 +176,38 @@ export async function POST(req: NextRequest) {
     ok: true,
     message: 'Pengaturan panel berhasil disimpan.',
   });
+}
+
+async function testSmtpConnection(config: z.infer<typeof SmtpTestSchema>) {
+  // Dynamic import to avoid bundling nodemailer in edge runtime
+  const nodemailer = await import('nodemailer').catch(() => null);
+  if (!nodemailer) {
+    return { success: false, message: 'Modul nodemailer tidak tersedia di server.' };
+  }
+
+  const transporter = nodemailer.default.createTransport({
+    host: config.host,
+    port: config.port,
+    secure: config.secure, // true for 465, false for other ports
+    auth: config.auth ? { user: config.username, pass: config.password } : undefined,
+    connectionTimeout: 10000,
+    greetingTimeout: 5000,
+    socketTimeout: 10000,
+  });
+
+  try {
+    await transporter.verify();
+    // Send test email
+    await transporter.sendMail({
+      from: config.from || config.username,
+      to: config.from || config.username,
+      subject: 'RackLite Panel - Test Email',
+      text: 'Ini adalah email tes dari RackLite Panel. Jika Anda menerima email ini, konfigurasi SMTP sudah benar.',
+      html: '<p>Ini adalah email tes dari <strong>RackLite Panel</strong>.</p><p>Jika Anda menerima email ini, konfigurasi SMTP sudah benar.</p>',
+    });
+    return { success: true, message: 'Tes email berhasil dikirim. Periksa inbox (dan folder spam).' };
+  } catch (err: unknown) {
+    const error = err as Error;
+    return { success: false, message: `Gagal: ${error.message}` };
+  }
 }

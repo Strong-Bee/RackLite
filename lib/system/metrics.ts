@@ -3,6 +3,8 @@ import os from 'node:os';
 import { runSystemCommand } from '@/lib/system/exec';
 import type { SystemMetrics } from '@/types/panel';
 
+const isWindows = os.platform() === 'win32';
+
 // Simpan snapshot sebelumnya untuk menghitung persentase CPU & kecepatan jaringan realtime
 let prevCpuSample: { idle: number; total: number } | null = null;
 let prevNetSample: {
@@ -12,6 +14,9 @@ let prevNetSample: {
 } | null = null;
 
 async function readCpuUsagePercent(): Promise<number> {
+  if (isWindows) {
+    return readCpuUsagePercentWindows();
+  }
   try {
     const stat = await fs.readFile('/proc/stat', 'utf8');
     const firstLine = stat.split('\n')[0];
@@ -23,7 +28,6 @@ async function readCpuUsagePercent(): Promise<number> {
 
     if (!prevCpuSample) {
       prevCpuSample = { idle, total };
-      // Hitung estimasi awal dari loadavg jika belum ada 2 sampel
       const load1 = os.loadavg()[0] || 0;
       const cores = os.cpus().length || 1;
       return Math.min(100, Math.round((load1 / cores) * 1000) / 10);
@@ -39,6 +43,41 @@ async function readCpuUsagePercent(): Promise<number> {
   } catch {
     return 0;
   }
+}
+
+async function readCpuUsagePercentWindows(): Promise<number> {
+  try {
+    // Use PowerShell for more accurate CPU usage on Windows
+    const res = await runSystemCommand('powershell', [
+      '-NoProfile',
+      '-Command',
+      'Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average | Select-Object -ExpandProperty Average',
+    ]);
+    if (res.ok && res.stdout.trim()) {
+      const avg = Number(res.stdout.trim());
+      if (!isNaN(avg) && avg >= 0 && avg <= 100) {
+        return Math.round(avg * 10) / 10;
+      }
+    }
+  } catch {
+    // fallback to wmic
+  }
+  try {
+    const res = await runSystemCommand('wmic', [
+      'cpu',
+      'get',
+      'LoadPercentage',
+      '/value',
+    ]);
+    if (!res.ok) return 0;
+    const match = res.stdout.match(/LoadPercentage=(\d+)/);
+    if (match) return Math.min(100, Number(match[1]));
+  } catch {
+    // fallback
+  }
+  const load1 = os.loadavg()[0] || 0;
+  const cores = os.cpus().length || 1;
+  return Math.min(100, Math.round((load1 / cores) * 1000) / 10);
 }
 
 async function readMemoryInfo() {
@@ -85,6 +124,9 @@ async function readMemoryInfo() {
 }
 
 async function readNetworkStats() {
+  if (isWindows) {
+    return readNetworkStatsWindows();
+  }
   const interfaces: Array<{ name: string; rxBytes: number; txBytes: number }> = [];
   let totalRxBytes = 0;
   let totalTxBytes = 0;
@@ -130,7 +172,57 @@ async function readNetworkStats() {
   };
 }
 
+async function readNetworkStatsWindows() {
+  const interfaces: Array<{ name: string; rxBytes: number; txBytes: number }> = [];
+  let totalRxBytes = 0;
+  let totalTxBytes = 0;
+
+  try {
+    const res = await runSystemCommand('powershell', [
+      '-NoProfile',
+      '-Command',
+      'Get-NetAdapterStatistics | Select-Object Name,ReceivedBytes,SentBytes | ConvertTo-Json',
+    ]);
+    if (res.ok && res.stdout.trim()) {
+      const adapters = JSON.parse(res.stdout);
+      const arr = Array.isArray(adapters) ? adapters : [adapters];
+      for (const adapter of arr) {
+        if (adapter.Name && adapter.ReceivedBytes !== undefined && adapter.SentBytes !== undefined) {
+          const rx = Number(adapter.ReceivedBytes) || 0;
+          const tx = Number(adapter.SentBytes) || 0;
+          interfaces.push({ name: adapter.Name, rxBytes: rx, txBytes: tx });
+          totalRxBytes += rx;
+          totalTxBytes += tx;
+        }
+      }
+    }
+  } catch {
+    // Fallback
+  }
+
+  const now = Date.now();
+  let rxBytesPerSec = 0;
+  let txBytesPerSec = 0;
+  if (prevNetSample) {
+    const dtSec = Math.max(0.5, (now - prevNetSample.timestamp) / 1000);
+    rxBytesPerSec = Math.max(0, Math.round((totalRxBytes - prevNetSample.rxBytes) / dtSec));
+    txBytesPerSec = Math.max(0, Math.round((totalTxBytes - prevNetSample.txBytes) / dtSec));
+  }
+  prevNetSample = { timestamp: now, rxBytes: totalRxBytes, txBytes: totalTxBytes };
+
+  return {
+    rxBytesPerSec,
+    txBytesPerSec,
+    totalRxBytes,
+    totalTxBytes,
+    interfaces,
+  };
+}
+
 async function readDiskUsage() {
+  if (isWindows) {
+    return readDiskUsageWindows();
+  }
   const res = await runSystemCommand('df', ['-B1', '-P', '-x', 'tmpfs', '-x', 'devtmpfs']);
   if (!res.ok) return [];
   const lines = res.stdout.trim().split('\n').slice(1);
@@ -159,7 +251,45 @@ async function readDiskUsage() {
   return disks;
 }
 
+async function readDiskUsageWindows(): Promise<SystemMetrics['disks']> {
+  try {
+    const res = await runSystemCommand('powershell', [
+      '-NoProfile',
+      '-Command',
+      'Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID,Size,FreeSpace,VolumeName | ConvertTo-Json',
+    ]);
+    if (!res.ok || !res.stdout.trim()) return [];
+
+    const disks: SystemMetrics['disks'] = [];
+    const drives = JSON.parse(res.stdout);
+    const arr = Array.isArray(drives) ? drives : [drives];
+    for (const drive of arr) {
+      if (drive.DeviceID && drive.Size !== undefined) {
+        const totalBytes = Number(drive.Size) || 0;
+        const freeBytes = Number(drive.FreeSpace) || 0;
+        const usedBytes = Math.max(0, totalBytes - freeBytes);
+        if (totalBytes > 0) {
+          disks.push({
+            filesystem: drive.VolumeName || drive.DeviceID,
+            mount: drive.DeviceID,
+            totalBytes,
+            usedBytes,
+            availableBytes: freeBytes,
+            usagePercent: Math.round((usedBytes / totalBytes) * 1000) / 10,
+          });
+        }
+      }
+    }
+    return disks;
+  } catch {
+    return [];
+  }
+}
+
 async function readTopProcesses() {
+  if (isWindows) {
+    return readTopProcessesWindows();
+  }
   const res = await runSystemCommand('ps', [
     '-eo',
     'pid,user,%cpu,%mem,comm',
@@ -180,6 +310,35 @@ async function readTopProcesses() {
     });
   }
   return procs;
+}
+
+async function readTopProcessesWindows(): Promise<SystemMetrics['processes']> {
+  try {
+    const res = await runSystemCommand('powershell', [
+      '-NoProfile',
+      '-Command',
+      'Get-Process | Sort-Object CPU -Descending | Select-Object -First 12 Id,ProcessName,CPU,WS | ConvertTo-Json',
+    ]);
+    if (!res.ok || !res.stdout.trim()) return [];
+
+    const procs = JSON.parse(res.stdout);
+    const arr = Array.isArray(procs) ? procs : [procs];
+    const result: SystemMetrics['processes'] = [];
+    for (const p of arr) {
+      if (p.Id && p.ProcessName) {
+        result.push({
+          pid: Number(p.Id) || 0,
+          user: 'SYSTEM',
+          cpu: Number(p.CPU) || 0,
+          mem: Math.round((Number(p.WS) || 0) / 1024 / 1024 * 100) / 100,
+          command: p.ProcessName,
+        });
+      }
+    }
+    return result;
+  } catch {
+    return [];
+  }
 }
 
 export async function collectSystemMetrics(): Promise<SystemMetrics> {

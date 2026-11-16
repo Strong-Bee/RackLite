@@ -18,11 +18,16 @@ import {
   Server,
   Settings,
   Shield,
+  Store,
   Sun,
   Terminal,
   Users,
   X,
   type LucideIcon,
+  Mail,
+  Key,
+  Box,
+  AlertTriangle,
 } from 'lucide-react';
 import { usePanel } from '@/components/layout/Providers';
 import { cn } from '@/lib/utils';
@@ -80,6 +85,16 @@ export function PanelShell({ username, role, children }: PanelShellProps) {
         { href: '/audit', label: t.nav.audit, icon: ScrollText, adminOnly: false },
         { href: '/users', label: t.nav.users, icon: Users, adminOnly: false },
         { href: '/settings', label: t.nav.settings, icon: Settings, adminOnly: false },
+      ],
+    },
+    {
+      label: t.groups.infra,
+      items: [
+        { href: '/smtp', label: t.nav.smtp, icon: Mail, adminOnly: true },
+        { href: '/ssh', label: t.nav.ssh, icon: Key, adminOnly: true },
+        { href: '/docker', label: t.nav.docker, icon: Box, adminOnly: true },
+        { href: '/store', label: t.nav.store, icon: Store, adminOnly: true },
+        { href: '/security', label: t.nav.security, icon: AlertTriangle, adminOnly: true },
       ],
     },
   ];

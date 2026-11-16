@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { RefreshCw, Download, Trash2, Check, AlertCircle, Package, Search, Filter, MoreHorizontal, ChevronRight } from 'lucide-react';
@@ -284,8 +284,7 @@ export function StoreClient() {
             <li>• Aplikasi diinstal ke direktori terpisah di bawah <code className="font-mono bg-white dark:bg-slate-800 px-1 rounded">/var/www/apps/</code> (Linux) atau <code className="font-mono bg-white dark:bg-slate-800 px-1 rounded">./data/apps/</code> (Windows)</li>
             <li>• Setiap aplikasi memiliki Nginx vhost otomatis dengan subdomain atau path prefix</li>
             <li>• Database (MariaDB/PostgreSQL) dibuat otomatis saat instalasi jika diperlukan</li>
-            <li>• Update aplikasi: klik "Instal" ulang pada versi baru (backup otomatis sebelum update)</li>
-            <li>• Log aplikasi tersedia di menu <strong>Log Viewer</strong></li>
+            <li>• Update aplikasi: klik &quot;Instal&quot; ulang pada versi baru (backup otomatis sebelum update)</li>
           </ul>
         </div>
       </Card>

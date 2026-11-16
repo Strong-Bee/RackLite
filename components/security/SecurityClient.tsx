@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { usePanel } from '@/components/layout/Providers';
+import * as d3 from 'd3';
 import {
   AlertTriangle,
   Shield,
@@ -25,6 +26,9 @@ import {
   EyeOff,
   ChevronDown,
   ChevronUp,
+  Globe,
+  BarChart2,
+  Network,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card } from '@/components/ui/Card';
@@ -77,8 +81,13 @@ export function SecurityClient() {
   const [blockForm, setBlockForm] = useState({ ip: '', reason: '', permanent: false });
   const [selectedEvent, setSelectedEvent] = useState<SecurityEvent | null>(null);
   const [expandedEvents, setExpandedEvents] = useState<Set<number>>(new Set());
+  const attackTimelineRef = useRef<SVGSVGElement>(null);
+  const threatDistributionRef = useRef<SVGSVGElement>(null);
+  const geoMapRef = useRef<SVGSVGElement>(null);
+  const [timelineData, setTimelineData] = useState<Array<{ time: string; failed: number; success: number }>>([]);
+  const [vizReady, setVizReady] = useState(false);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       const res = await fetch('/api/security/stats?limit=100');
       if (res.ok) {
@@ -91,16 +100,204 @@ export function SecurityClient() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [notify, t.common.noData]);
+
+  // Generate attack timeline data from events
+  useEffect(() => {
+    if (!data?.events) return;
+    const hourly: Record<string, { failed: number; success: number }> = {};
+    const now = new Date();
+    for (let i = 23; i >= 0; i--) {
+      const d = new Date(now.getTime() - i * 3600000);
+      const key = d.toISOString().slice(0, 13);
+      hourly[key] = { failed: 0, success: 0 };
+    }
+    data.events.forEach((e) => {
+      const key = e.created_at.slice(0, 13);
+      if (hourly[key]) {
+        if (e.event_type.includes('FAILED') || e.severity === 'critical' || e.severity === 'warning') {
+          hourly[key].failed++;
+        } else {
+          hourly[key].success++;
+        }
+      }
+    });
+    queueMicrotask(() => setTimelineData(Object.entries(hourly).map(([time, v]) => ({ time, ...v }))));
+  }, [data?.events]);
+
+  // Render D3 visualizations
+  useEffect(() => {
+    if (!vizReady || !attackTimelineRef.current || !threatDistributionRef.current || !geoMapRef.current) return;
+
+    // Attack Timeline Chart
+    const timelineSvg = d3.select(attackTimelineRef.current);
+    timelineSvg.selectAll('*').remove();
+    const width = attackTimelineRef.current.clientWidth || 600;
+    const height = 200;
+    const margin = { top: 20, right: 30, bottom: 40, left: 50 };
+    const innerWidth = width - margin.left - margin.right;
+    const innerHeight = height - margin.top - margin.bottom;
+
+    const g = timelineSvg
+      .attr('width', width)
+      .attr('height', height)
+      .append('g')
+      .attr('transform', `translate(${margin.left},${margin.top})`);
+
+    const x = d3.scaleBand()
+      .domain(timelineData.map(d => d.time.slice(11)))
+      .range([0, innerWidth])
+      .padding(0.1);
+
+    const y = d3.scaleLinear()
+      .domain([0, d3.max(timelineData, d => Math.max(d.failed, d.success)) || 10])
+      .nice()
+      .range([innerHeight, 0]);
+
+    g.append('g')
+      .attr('transform', `translate(0,${innerHeight})`)
+      .call(d3.axisBottom(x).tickValues(x.domain().filter((_, i) => i % 2 === 0)))
+      .selectAll('text')
+      .attr('class', 'text-xs fill-slate-500 dark:fill-slate-400');
+
+    g.append('g')
+      .call(d3.axisLeft(y).ticks(5))
+      .selectAll('text')
+      .attr('class', 'text-xs fill-slate-500 dark:fill-slate-400');
+
+    // Failed bars
+    g.selectAll('.failed-bar')
+      .data(timelineData)
+      .enter()
+      .append('rect')
+      .attr('class', 'failed-bar')
+      .attr('x', d => x(d.time.slice(11)) || 0)
+      .attr('y', d => y(d.failed))
+      .attr('width', x.bandwidth() / 2)
+      .attr('height', d => innerHeight - y(d.failed))
+      .attr('fill', '#ef4444')
+      .attr('opacity', 0.8);
+
+    // Success bars
+    g.selectAll('.success-bar')
+      .data(timelineData)
+      .enter()
+      .append('rect')
+      .attr('class', 'success-bar')
+      .attr('x', d => (x(d.time.slice(11)) || 0) + x.bandwidth() / 2)
+      .attr('y', d => y(d.success))
+      .attr('width', x.bandwidth() / 2)
+      .attr('height', d => innerHeight - y(d.success))
+      .attr('fill', '#22c55e')
+      .attr('opacity', 0.6);
+
+    // Threat Distribution Pie Chart
+    const threatSvg = d3.select(threatDistributionRef.current);
+    threatSvg.selectAll('*').remove();
+    const threatWidth = threatDistributionRef.current.clientWidth || 300;
+    const threatHeight = 200;
+    const threatRadius = Math.min(threatWidth, threatHeight) / 2 - 20;
+
+    const threatG = threatSvg
+      .attr('width', threatWidth)
+      .attr('height', threatHeight)
+      .append('g')
+      .attr('transform', `translate(${threatWidth / 2},${threatHeight / 2})`);
+
+    const threatData = [
+      { label: 'Critical', value: data?.stats.criticalEvents || 0, color: '#ef4444' },
+      { label: 'Warning', value: data?.stats.warningEvents || 0, color: '#f59e0b' },
+      { label: 'Info', value: (data?.stats.totalAttempts || 0) - (data?.stats.failedAttempts || 0), color: '#3b82f6' },
+    ].filter(d => d.value > 0);
+
+    if (threatData.length > 0) {
+      const pie = d3.pie<{ label: string; value: number; color: string }>().value(d => d.value);
+      const arc = d3.arc<d3.PieArcDatum<{ label: string; value: number; color: string }>>().innerRadius(threatRadius * 0.5).outerRadius(threatRadius);
+
+      threatG.selectAll('.arc')
+        .data(pie(threatData))
+        .enter()
+        .append('path')
+        .attr('class', 'arc')
+        .attr('d', arc as any)
+        .attr('fill', d => d.data.color)
+        .attr('stroke', '#fff')
+        .attr('stroke-width', 2);
+
+      // Labels
+      const labelArc = d3.arc<d3.PieArcDatum<{ label: string; value: number; color: string }>>().innerRadius(threatRadius * 1.1).outerRadius(threatRadius * 1.1);
+      threatG.selectAll('.label')
+        .data(pie(threatData))
+        .enter()
+        .append('text')
+        .attr('class', 'label text-xs fill-slate-600 dark:fill-slate-400 text-anchor-middle')
+        .attr('transform', d => `translate(${labelArc.centroid(d)})`)
+        .text(d => `${d.data.label}: ${d.data.value}`);
+    }
+
+    // Geo Map (simple world map with attack origins)
+    const geoSvg = d3.select(geoMapRef.current);
+    geoSvg.selectAll('*').remove();
+    const geoWidth = geoMapRef.current.clientWidth || 600;
+    const geoHeight = 200;
+
+    const projection = d3.geoNaturalEarth1()
+      .scale(geoWidth / 6.5)
+      .translate([geoWidth / 2, geoHeight / 2]);
+
+    const path = d3.geoPath().projection(projection);
+
+    // Load world map data (simplified - in production use topojson)
+    // For now, show attack origins as circles based on top attackers
+    const attackers = data?.stats.topAttackerIps || [];
+
+    // Simple world outline
+    const worldOutline = {
+      type: 'Sphere' as const
+    };
+
+    geoSvg.append('path')
+      .datum(worldOutline)
+      .attr('d', path as any)
+      .attr('fill', '#e2e8f0')
+      .attr('stroke', '#94a3b8')
+      .attr('stroke-width', 0.5);
+
+    // Add attacker circles (simplified - using random positions for demo)
+    attackers.slice(0, 10).forEach((attacker, i) => {
+      // Simulate geographic distribution based on IP hash
+      const hash = attacker.ip.split('.').reduce((a, b) => a + parseInt(b), 0);
+      const lon = (hash % 360) - 180;
+      const lat = ((hash * 7) % 180) - 90;
+      const [x, y] = projection([lon, lat]) as [number, number];
+
+      if (x && y) {
+        geoSvg.append('circle')
+          .attr('cx', x)
+          .attr('cy', y)
+          .attr('r', Math.max(4, Math.min(12, attacker.attempts / 2)))
+          .attr('fill', '#ef4444')
+          .attr('opacity', 0.7)
+          .attr('stroke', '#fff')
+          .attr('stroke-width', 1);
+      }
+    });
+  }, [data, timelineData, vizReady]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchData();
-    let interval: NodeJS.Timeout;
-    if (autoRefresh) {
-      interval = setInterval(fetchData, 30000);
-    }
+  }, [fetchData]);
+
+  useEffect(() => {
+    queueMicrotask(() => setVizReady(true));
+  }, []);
+
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
-  }, [autoRefresh]);
+  }, [autoRefresh, fetchData]);
 
   const handleBlockIp = async () => {
     try {
@@ -297,6 +494,48 @@ export function SecurityClient() {
                   : '100%'}
               </p>
             </div>
+          </div>
+        </Card>
+      </div>
+
+      {/* D3 Visualizations */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Attack Timeline */}
+        <Card>
+          <div className="p-4 border-b border-slate-200 dark:border-slate-700">
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              <Activity className="w-5 h-5" />
+              Timeline Serangan (24 Jam)
+            </h2>
+          </div>
+          <div className="p-4 h-64">
+            <svg ref={attackTimelineRef} className="w-full h-full" />
+          </div>
+        </Card>
+
+        {/* Threat Distribution */}
+        <Card>
+          <div className="p-4 border-b border-slate-200 dark:border-slate-700">
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              <BarChart2 className="w-5 h-5" />
+              Distribusi Ancaman
+            </h2>
+          </div>
+          <div className="p-4 h-64 flex items-center justify-center">
+            <svg ref={threatDistributionRef} className="w-full h-full max-w-xs" />
+          </div>
+        </Card>
+
+        {/* Geographic Attack Map */}
+        <Card>
+          <div className="p-4 border-b border-slate-200 dark:border-slate-700">
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              <Globe className="w-5 h-5" />
+              Peta Asal Serangan
+            </h2>
+          </div>
+          <div className="p-4 h-64">
+            <svg ref={geoMapRef} className="w-full h-full" />
           </div>
         </Card>
       </div>

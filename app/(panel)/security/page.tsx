@@ -1,5 +1,4 @@
 import { SecurityClient } from '@/components/security/SecurityClient';
-import { PanelShell } from '@/components/layout/PanelShell';
 import { getServerSession } from '@/lib/auth';
 
 export default async function SecurityPage() {
@@ -9,9 +8,5 @@ export default async function SecurityPage() {
     return <div>Loading...</div>;
   }
 
-  return (
-    <PanelShell username={session.username} role={session.role}>
-      <SecurityClient />
-    </PanelShell>
-  );
+  return <SecurityClient />;
 }

@@ -173,8 +173,8 @@ export function SmtpClient() {
           <h3 className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">Informasi</h3>
           <ul className="text-xs text-slate-500 dark:text-slate-400 space-y-1">
             <li>• Gunakan port 587 (STARTTLS) atau 465 (SSL/TLS implicit)</li>
-            <li>• Untuk Gmail: aktifkan "App Password" di akun Google</li>
-            <li>• Tes email akan dikirim ke alamat <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1 rounded">{config?.from || 'from address'}</code></li>
+            <li>• Untuk Gmail: aktifkan &apos;App Password&apos; di akun Google</li>
+            <li>• Tes email akan dikirim ke alamat <code className="font-mono bg-slate-100 dark:bg-slate-800 px-1 rounded">{config?.from || "from address"}</code></li>
             <li>• Konfigurasi disimpan di database panel (sqlite), tidak di file .env</li>
           </ul>
         </div>
